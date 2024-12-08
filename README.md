@@ -1,4 +1,4 @@
-## Hi there 👋
+## Hey, it's parsa
 
 <!--
 **parsa222/parsa222** is a ✨ _special_ ✨ repository because its `README.md` (this file) appears on your GitHub profile.
@@ -14,3 +14,6 @@ Here are some ideas to get you started:
 - 😄 Pronouns: ...
 - ⚡ Fun fact: ...
 -->
+<img src="https://raw.githubusercontent.com/parsa222/parsa222/output/snake.svg" alt="Snake animation" />
+
+###
