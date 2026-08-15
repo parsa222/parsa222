@@ -1,0 +1,107 @@
+name: profile
+
+on:
+  schedule:
+    - cron: "24 6 * * *"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: profile
+  cancel-in-progress: false
+
+jobs:
+  tiles:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: snake
+        uses: Platane/snk/svg-only@v3.5.0
+        with:
+          github_user_name: ${{ github.repository_owner }}
+          outputs: |
+            dist/snake.svg?color_snake=#fed7aa&color_dots=#292016,#642708,#92400e,#d97706,#fbbf24
+            dist/snake-light.svg?color_snake=#7c2d12&color_dots=#ebedf0,#fde68a,#fbbf24,#d97706,#92400e
+
+      - name: keep pacman from phoning home
+        run: echo "127.0.0.1 elec.abozanona.me" | sudo tee -a /etc/hosts
+
+      - name: pacman
+        uses: abozanona/pacman-contribution-graph@v5.3.2
+        with:
+          github_user_name: ${{ github.repository_owner }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          games: pacman
+
+      - name: game of life
+        uses: satomasahiro2005/contribution-life@v1.1.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          login: ${{ github.repository_owner }}
+          layout: calendar
+          out_dir: dist
+          name: life-raw
+
+      - name: rename the tiles
+        run: |
+          set -e
+          mv dist/*-contribution-graph-dark.svg dist/game.svg
+          mv dist/*-contribution-graph.svg      dist/game-light.svg
+          mv dist/life-raw-dark.svg             dist/life.svg
+          mv dist/life-raw.svg                  dist/life-light.svg
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tiles
+          path: dist
+          retention-days: 7
+          if-no-files-found: error
+
+  publish:
+    needs: tiles
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: tiles
+          path: dist
+
+      - name: generate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CARD_PALETTE: blueprint-amber
+        run: python3 gen.py
+
+      - name: align the four calendars
+        run: python3 gen.py --retile
+
+      - name: publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          cd dist
+          git init -q -b output
+          git add -A
+          git commit -qm "profile assets"
+          git push -qf "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" output
+          cd ..
+
+          git diff --quiet -- README.md && exit 0
+          git add README.md
+          git commit -m "refresh contributed-in panel [skip ci]"
+          git pull --rebase --autostash
+          git push
