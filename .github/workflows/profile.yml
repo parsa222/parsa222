@@ -105,10 +105,10 @@ jobs:
           base=$(git rev-parse HEAD)
           git diff --quiet -- README.md && exit 0
           git add README.md
-          if [ "$(git log -1 --format=%ae)" = "41898282+github-actions[bot]@users.noreply.github.com" ]; then
+          if [ "$(git log -1 --format=%ae)" = "41898282+github-actions[bot]@users.noreply.github.com" ] &&
+             [ "$(git log -1 --format=%s)" = "refresh contributed-in panel [skip ci]" ]; then
             git commit -q --amend --no-edit
-            git push -q --force-with-lease=main:"$base" origin HEAD:main
           else
             git commit -qm "refresh contributed-in panel [skip ci]"
-            git push -q origin HEAD:main
           fi
+          git push -q --force-with-lease=main:"$base" origin HEAD:main

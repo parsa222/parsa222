@@ -1,5 +1,6 @@
 import base64
 import datetime
+import http.client
 import json
 import math
 import os
@@ -91,6 +92,7 @@ query ($login: String!) {
   user(login: $login) {
     createdAt
     contributionsCollection {
+      totalCommitContributions
       contributionCalendar {
         totalContributions
         weeks { contributionDays { contributionCount contributionLevel weekday } }
@@ -180,7 +182,8 @@ def human_bytes(n):
 
 
 def lang_color(info, rank):
-    return info["color"] or NULL_LANG[rank % len(NULL_LANG)]
+    color = info["color"] or ""
+    return color if re.fullmatch(r"#[0-9a-fA-F]{6}", color) else NULL_LANG[rank % len(NULL_LANG)]
 
 
 def theme_for(palette, mode):
@@ -192,12 +195,16 @@ def fetch(url, data=None, headers={}):
     for attempt in range(4):
         try:
             with urllib.request.urlopen(req, timeout=30) as res:
-                return res.headers.get_content_type(), res.read()
-        except (urllib.error.URLError, TimeoutError) as e:
+                body = res.read(4 << 20)
+                if len(body) == 4 << 20:
+                    raise SystemExit(f"{url}: response over 4 MB")
+                return res.headers.get_content_type(), body
+        except (OSError, http.client.HTTPException) as e:
             code = getattr(e, "code", 503)
             if attempt == 3 or code not in (429, 500, 502, 503, 504):
                 raise
-            time.sleep(2 ** attempt)
+            retry_after = (getattr(e, "headers", None) or {}).get("Retry-After", "")
+            time.sleep(min(int(retry_after), 60) if retry_after.isdigit() else 2 ** attempt)
 
 
 def post(token, query, **variables):
@@ -266,6 +273,7 @@ def shape(main, windows, login):
     return {
         "login": login,
         "total": cal["totalContributions"],
+        "commits": main["contributionsCollection"]["totalCommitContributions"],
         "weeks": weeks,
         "panel": external,
         "external_count": len(external),
@@ -494,8 +502,8 @@ def blocks_svg(data, theme):
                 f'scale({dxx / sw:.4f} {s_side:.4f})">{rise}</rect></g>')
 
     bottom, big, small = H - 20 * K, 32 * K, 24 * K
-    n_total, n_repos = f"{data['total']:,}", f"{data['repos']:,}"
-    label_total, label_repos = "contributions in the last year", "public repos"
+    n_total, n_repos = f"{data['commits']:,}", f"{data['repos']:,}"
+    label_total, label_repos = "commits in the last year", "public repos"
     x0 = (W - (text_width(n_total, big) + 8 * K + text_width(label_total, small) + 60 * K
                + 42 * K + text_width(n_repos, big) + 8 * K + text_width(label_repos, small))) / 2
     x_label = x0 + text_width(n_total, big) + 8 * K
@@ -504,7 +512,7 @@ def blocks_svg(data, theme):
     x_label2 = x_repos + text_width(n_repos, big) + 8 * K
 
     return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}" height="{H}" \
-font-family="{FONT}" role="img" aria-label="{data['total']} contributions in the last year as 3d blocks">
+font-family="{FONT}" role="img" aria-label="{data['commits']} commits in the last year, contributions as 3d blocks">
 <defs>{"".join(defs)}</defs>
 <rect x="0.5" y="0.5" width="{W - 1}" height="{H - 1}" rx="14" fill="{theme['card']}" stroke="{theme['line']}"/>
 {"".join(bars)}
@@ -622,7 +630,9 @@ def avatar_svg(ctype, png, org, ring):
 def avatars(data):
     files = {}
     for i, r in enumerate(data["panel"][:TOP_REPOS], 1):
-        ctype, png = fetch(f"https://github.com/{urllib.parse.quote(r['owner'])}.png?size=64")
+        ctype, png = fetch(f"https://github.com/{urllib.parse.quote(r['owner'], safe='')}.png?size=64")
+        if ctype not in ("image/png", "image/jpeg", "image/gif", "image/webp"):
+            raise SystemExit(f"avatar for {r['owner']}: unexpected content type {ctype}")
         for mode in ("dark", "light"):
             sfx = "" if mode == "dark" else "-light"
             files[f"avatar-{i}{sfx}.svg"] = avatar_svg(ctype, png, r["org"], RING[mode])
@@ -651,14 +661,14 @@ def panel_html(data):
 def write_panel(block):
     with README.open("r", encoding="utf-8", newline="") as fh:
         old = fh.read()
-    if PANEL_START not in old or PANEL_END not in old:
-        raise SystemExit(f"README.md has no {PANEL_START} ... {PANEL_END} block")
+    if old.count(PANEL_START) != 1 or old.count(PANEL_END) != 1:
+        raise SystemExit(f"README.md needs exactly one {PANEL_START} and one {PANEL_END}")
     if old.index(PANEL_END) < old.index(PANEL_START):
         raise SystemExit(f"README.md has {PANEL_END} before {PANEL_START}")
+    if "\r\n" in old:
+        block = block.replace("\n", "\r\n")
     pattern = re.escape(PANEL_START) + r".*?" + re.escape(PANEL_END)
-    new, count = re.subn(pattern, lambda _: block, old, flags=re.S)
-    if count != 1:
-        raise SystemExit(f"README.md panel block matched {count} times, expected 1")
+    new = re.sub(pattern, lambda _: block, old, flags=re.S)
     if new == old:
         return False
     with README.open("w", encoding="utf-8", newline="") as fh:
@@ -711,6 +721,10 @@ def main():
     OUT.mkdir(exist_ok=True)
     if "--retile" in sys.argv:
         return retile_all(int(os.environ.get("WEEKS", "53")))
+    tiles = {f for key, files in TILES.items() if key != "grid" for f in files}
+    stray = sorted(p.name for p in OUT.iterdir() if p.name not in tiles)
+    if stray:
+        raise SystemExit(f"{OUT}/ should hold only the six tiles from the tiles job, found: {', '.join(stray)}")
 
     palette = os.environ.get("CARD_PALETTE", "blueprint-amber")
     login = os.environ["GITHUB_REPOSITORY_OWNER"]
