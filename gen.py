@@ -1,3 +1,4 @@
+import base64
 import datetime
 import json
 import math
@@ -7,6 +8,7 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 EMAIL = "me@parsa222.lol"
@@ -55,12 +57,6 @@ OCTI_REPO = ("M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 
              "A2.495 2.495 0 0 1 2 11.5Zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8Z"
              "M5 12.25a.25.25 0 0 1 .25-.25h3.5a.25.25 0 0 1 .25.25v3.25a.25.25 0 0 1-.4.2"
              "l-1.45-1.087a.249.249 0 0 0-.3 0L5.4 15.7a.25.25 0 0 1-.4-.2Z")
-OCTI_STAR = ("M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97"
-             ".719 4.192a.751.751 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194"
-             "L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Zm0 2.445L6.615 5.5"
-             "a.75.75 0 0 1-.564.41l-3.097.45 2.24 2.184a.75.75 0 0 1 .216.664l-.528 3.084 2.769-1.456"
-             "a.75.75 0 0 1 .698 0l2.77 1.456-.53-3.084a.75.75 0 0 1 .216-.664l2.24-2.183-3.096-.45"
-             "a.75.75 0 0 1-.564-.41L8 2.694Z")
 
 GITBLOCK_TOP = (32, [0x00000000, 0x00000000, 0x01c001c0, 0x06300630, 0x0a080a08, 0x12081208,
                      0x11041104, 0x11841184, 0x12c412c4, 0x0d780d78, 0x0aa80aa8, 0x07500750,
@@ -80,7 +76,9 @@ SOURCES = {
     "life": {"origin": (30, 20), "cell": 11, "pitch": 14},
 }
 CARDS = ["grid", "blocks", "radar", "pie", "badge-repos", "badge-lang-1", "badge-lang-2",
-         "badge-lang-3", "badge-lang-4", "badge-email", "badge-site", "star"]
+         "badge-lang-3", "badge-lang-4", "badge-email", "badge-site"]
+CARDS += [f"avatar-{i}" for i in range(1, TOP_REPOS + 1)]
+RING = {"dark": "#3d444d", "light": "#d1d9e0"}
 TILES = {
     "snake": ["snake.svg", "snake-light.svg"],
     "grid": ["grid.svg", "grid-light.svg"],
@@ -115,7 +113,7 @@ query ($login: String!, $from: DateTime!, $to: DateTime!) {
       totalPullRequestReviewContributions
       totalRepositoryContributions
       commitContributionsByRepository(maxRepositories: 100) {
-        repository { nameWithOwner stargazerCount owner { login } }
+        repository { nameWithOwner stargazerCount owner { login __typename } }
         contributions { totalCount }
       }
     }
@@ -189,22 +187,23 @@ def theme_for(palette, mode):
     return {**BASE[mode], "cells": PALETTES[palette][mode]}
 
 
-def post(token, query, **variables):
-    body = json.dumps({"query": query, "variables": variables}).encode()
-    req = urllib.request.Request(API, data=body, headers={
-        "Authorization": f"bearer {token}",
-        "Content-Type": "application/json",
-        "User-Agent": "profile-gen",
-    })
+def fetch(url, data=None, headers={}):
+    req = urllib.request.Request(url, data=data, headers={"User-Agent": "profile-gen", **headers})
     for attempt in range(4):
         try:
-            payload = json.loads(urllib.request.urlopen(req, timeout=30).read())
-            break
+            with urllib.request.urlopen(req, timeout=30) as res:
+                return res.headers.get_content_type(), res.read()
         except (urllib.error.URLError, TimeoutError) as e:
             code = getattr(e, "code", 503)
             if attempt == 3 or code not in (429, 500, 502, 503, 504):
                 raise
             time.sleep(2 ** attempt)
+
+
+def post(token, query, **variables):
+    body = json.dumps({"query": query, "variables": variables}).encode()
+    payload = json.loads(fetch(API, body, {"Authorization": f"bearer {token}",
+                                          "Content-Type": "application/json"})[1])
     if "errors" in payload:
         raise SystemExit("graphql: " + json.dumps(payload["errors"]))
     return payload["data"]["user"]
@@ -256,6 +255,7 @@ def shape(main, windows, login):
             full = r["repository"]["nameWithOwner"]
             entry = repos.setdefault(full, {"name": full,
                                             "owner": r["repository"]["owner"]["login"],
+                                            "org": r["repository"]["owner"]["__typename"] == "Organization",
                                             "count": 0})
             entry["count"] += r["contributions"]["totalCount"]
             entry["stars"] = r["repository"]["stargazerCount"]
@@ -610,22 +610,36 @@ font-family="{FONT}" role="img" aria-label="languages by size">
 <g transform="translate({f2(radius)} {f2(radius)})">{"".join(arcs)}</g></svg>"""
 
 
-def star_svg(theme):
-    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="14" height="14" '
-            f'role="img" aria-label="stars"><path d="{OCTI_STAR}" fill="{theme["muted"]}"/></svg>')
+def avatar_svg(ctype, png, org, ring):
+    r = 6 if org else 13
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 26 26" width="26" height="26" '
+            f'role="img" aria-label="avatar"><clipPath id="c"><rect width="26" height="26" rx="{r}"/></clipPath>'
+            f'<image href="data:{ctype};base64,{base64.b64encode(png).decode()}" width="26" height="26" '
+            f'clip-path="url(#c)"/><rect x="0.5" y="0.5" width="25" height="25" rx="{r - 0.5}" '
+            f'fill="none" stroke="{ring}"/></svg>')
+
+
+def avatars(data):
+    files = {}
+    for i, r in enumerate(data["panel"][:TOP_REPOS], 1):
+        ctype, png = fetch(f"https://github.com/{urllib.parse.quote(r['owner'])}.png?size=64")
+        for mode in ("dark", "light"):
+            sfx = "" if mode == "dark" else "-light"
+            files[f"avatar-{i}{sfx}.svg"] = avatar_svg(ctype, png, r["org"], RING[mode])
+    return files
 
 
 def panel_html(data):
-    raw = f"https://raw.githubusercontent.com/{data['login']}/{data['login']}/output"
-    star = (f'<picture><source media="(prefers-color-scheme: light)" srcset="{raw}/star-light.svg">'
-            f'<img src="{raw}/star.svg" width="14" height="14" align="absmiddle" alt="stars"></picture>')
+    raw = f"https://raw.githubusercontent.com/{data['login']}/{data['login']}"
+    star = (f'<picture><source media="(prefers-color-scheme: light)" srcset="{raw}/main/star-light.svg">'
+            f'<img src="{raw}/main/star.svg" width="14" height="14" align="absmiddle" alt="stars"></picture>')
     rows = []
-    for r in data["panel"][:TOP_REPOS]:
+    for i, r in enumerate(data["panel"][:TOP_REPOS], 1):
         url = f"https://github.com/{esc(r['name'])}"
-        src = f"https://github.com/{esc(r['owner'])}.png?size=64"
+        avatar = (f'<picture><source media="(prefers-color-scheme: light)" srcset="{raw}/output/avatar-{i}-light.svg">'
+                  f'<img src="{raw}/output/avatar-{i}.svg" width="26" height="26" align="absmiddle" alt=""></picture>')
         stars = f' <code>{star} {human_count(r["stars"])}</code>' if r.get("stars") else ""
-        rows.append(f'<tr><td><a href="{url}"><kbd><img src="{src}" width="22" height="22" '
-                    f'align="absmiddle" alt=""></kbd></a> <a href="{url}">{esc(r["name"])}</a>'
+        rows.append(f'<tr><td><a href="{url}">{avatar}</a> <a href="{url}">{esc(r["name"])}</a>'
                     f'{stars}</td><td align="right"><code>{r["count"]}</code></td></tr>')
     if not rows:
         rows.append('<tr><td colspan="2">no external contributions yet</td></tr>')
@@ -662,7 +676,6 @@ def build(data, palette):
         files[f"blocks{sfx}.svg"] = blocks_svg(data, t)
         files[f"radar{sfx}.svg"] = radar_svg(data, t, ink)
         files[f"pie{sfx}.svg"] = pie_svg(data, t)
-        files[f"star{sfx}.svg"] = star_svg(BASE[mode])
         links = link_badges(BASE[mode], accent if mode == "dark" else ink)
         for name, svg in {**badges(data, BASE[mode], accent), **links}.items():
             files[name.replace(".svg", f"{sfx}.svg")] = svg
@@ -713,7 +726,7 @@ def main():
           f"{len(data['langs'])} languages, {data['repos']} public repos")
     print("all time: " + ", ".join(f"{k} {v}" for k, v in data["radar"].items()))
 
-    for name, svg in build(data, palette).items():
+    for name, svg in {**build(data, palette), **avatars(data)}.items():
         (OUT / name).write_text(svg)
         print(f"{name:22} {len(svg) // 1024:>4} KB")
 

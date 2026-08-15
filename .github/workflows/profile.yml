@@ -2,7 +2,7 @@ name: profile
 
 on:
   schedule:
-    - cron: "24 6 * * *"
+    - cron: "23 6 * * *"
   push:
     branches: [main]
   workflow_dispatch:
@@ -70,6 +70,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - uses: actions/download-artifact@v8
         with:
@@ -100,8 +102,13 @@ jobs:
           git push -qf "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" output
           cd ..
 
+          base=$(git rev-parse HEAD)
           git diff --quiet -- README.md && exit 0
           git add README.md
-          git commit -m "refresh contributed-in panel [skip ci]"
-          git pull --rebase --autostash
-          git push
+          if [ "$(git log -1 --format=%ae)" = "41898282+github-actions[bot]@users.noreply.github.com" ]; then
+            git commit -q --amend --no-edit
+            git push -q --force-with-lease=main:"$base" origin HEAD:main
+          else
+            git commit -qm "refresh contributed-in panel [skip ci]"
+            git push -q origin HEAD:main
+          fi
