@@ -88,7 +88,12 @@
 <!--START:panel-->
 <table>
 <tr><th align="left">contributed in</th><th align="right">commits</th></tr>
-<tr><td colspan="2">waiting for the first workflow run</td></tr>
+<tr><td><a href="https://github.com/PasarGuard/panel"><kbd><img src="https://github.com/PasarGuard.png?size=64" width="22" height="22" align="absmiddle" alt=""></kbd></a> <a href="https://github.com/PasarGuard/panel">PasarGuard/panel</a> <code><picture><source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/parsa222/parsa222/output/star-light.svg"><img src="https://raw.githubusercontent.com/parsa222/parsa222/output/star.svg" width="14" height="14" align="absmiddle" alt="stars"></picture> 2.4k</code></td><td align="right"><code>2</code></td></tr>
+<tr><td><a href="https://github.com/eneskirca/nodeterm"><kbd><img src="https://github.com/eneskirca.png?size=64" width="22" height="22" align="absmiddle" alt=""></kbd></a> <a href="https://github.com/eneskirca/nodeterm">eneskirca/nodeterm</a> <code><picture><source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/parsa222/parsa222/output/star-light.svg"><img src="https://raw.githubusercontent.com/parsa222/parsa222/output/star.svg" width="14" height="14" align="absmiddle" alt="stars"></picture> 594</code></td><td align="right"><code>21</code></td></tr>
+<tr><td><a href="https://github.com/Uvic-ECSS/Lockers"><kbd><img src="https://github.com/Uvic-ECSS.png?size=64" width="22" height="22" align="absmiddle" alt=""></kbd></a> <a href="https://github.com/Uvic-ECSS/Lockers">Uvic-ECSS/Lockers</a></td><td align="right"><code>44</code></td></tr>
+<tr><td><a href="https://github.com/Macintosh-Fan/uvic-csc-130-project"><kbd><img src="https://github.com/Macintosh-Fan.png?size=64" width="22" height="22" align="absmiddle" alt=""></kbd></a> <a href="https://github.com/Macintosh-Fan/uvic-csc-130-project">Macintosh-Fan/uvic-csc-130-project</a></td><td align="right"><code>21</code></td></tr>
+<tr><td><a href="https://github.com/P-Verma101/Hackathon"><kbd><img src="https://github.com/P-Verma101.png?size=64" width="22" height="22" align="absmiddle" alt=""></kbd></a> <a href="https://github.com/P-Verma101/Hackathon">P-Verma101/Hackathon</a></td><td align="right"><code>7</code></td></tr>
+<tr><td><a href="https://github.com/Uvic-ECSS/.github"><kbd><img src="https://github.com/Uvic-ECSS.png?size=64" width="22" height="22" align="absmiddle" alt=""></kbd></a> <a href="https://github.com/Uvic-ECSS/.github">Uvic-ECSS/.github</a></td><td align="right"><code>3</code></td></tr>
 </table>
 <!--END:panel-->
 </div>
