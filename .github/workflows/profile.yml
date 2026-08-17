@@ -95,6 +95,7 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+          git show origin/output:profile.webp > dist/profile.webp 2>/dev/null || rm -f dist/profile.webp
           cd dist
           git init -q -b output
           git add -A
@@ -112,3 +113,41 @@ jobs:
             git commit -qm "refresh contributed-in panel [skip ci]"
           fi
           git push -q --force-with-lease=main:"$base" origin HEAD:main
+
+  snapshot:
+    needs: publish
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/checkout@v7
+        with:
+          ref: output
+          path: out
+
+      - name: let the fresh tiles reach github.com
+        run: sleep 330
+
+      - name: browser
+        run: |
+          npm i playwright@1.62.1
+          npx playwright install --with-deps chromium
+
+      - name: shoot
+        env:
+          TARGET_URL: https://github.com/${{ github.repository_owner }}
+        run: node snapshot.mjs out/profile.webp
+
+      - name: publish
+        working-directory: out
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add profile.webp
+          git diff --quiet --cached && exit 0
+          git commit -qm "profile snapshot"
+          git push -q origin HEAD:output
