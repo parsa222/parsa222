@@ -8,7 +8,6 @@ import pathlib
 import re
 import sys
 import time
-import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -16,11 +15,17 @@ EMAIL = "me@parsa222.lol"
 SITE = "parsa222.lol"
 TOP_REPOS = 10
 
-API = "https://api.github.com/graphql"
-OUT = pathlib.Path("dist")
+API_URL = "https://api.github.com/graphql"
+MAX_RESPONSE = 4 * 1024 * 1024
+RETRY_STATUSES = (429, 500, 502, 503, 504)
+
+DIST = pathlib.Path("dist")
+TILE_DIR = os.environ.get("TILE_DIR", "")
+RUN_DIR = DIST / TILE_DIR if TILE_DIR else DIST
 README = pathlib.Path("README.md")
 PANEL_START = "<!--START:panel-->"
 PANEL_END = "<!--END:panel-->"
+MODES = (("dark", ""), ("light", "-light"))
 
 PALETTES = {
     "blueprint-amber": {"dark": ["#1c2331", "#193f7a", "#2265b5", "#d97706", "#fbbf24"],
@@ -36,13 +41,13 @@ PALETTES = {
     "mono": {"dark": ["#1c2128", "#363c44", "#4d545d", "#8b949e", "#e6edf3"],
              "light": ["#ebedf0", "#d0d7de", "#9198a1", "#59636e", "#1f2328"]},
 }
-BASE = {
+BASE_COLORS = {
     "dark": {"card": "#161b22", "fg": "#e6edf3", "muted": "#8b949e", "line": "#30363d"},
     "light": {"card": "#f6f8fa", "fg": "#1f2328", "muted": "#59636e", "line": "#d1d9e0"},
 }
 LEVELS = {"NONE": 0, "FIRST_QUARTILE": 1, "SECOND_QUARTILE": 2, "THIRD_QUARTILE": 3,
           "FOURTH_QUARTILE": 4}
-NULL_LANG = ["#8b949e", "#6e7681", "#57606a", "#768390", "#424a53", "#909dab"]
+FALLBACK_LANGUAGE_COLORS = ["#8b949e", "#6e7681", "#57606a", "#768390", "#424a53", "#909dab"]
 FONT = "ui-sans-serif,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',sans-serif"
 
 ICONS = {
@@ -53,41 +58,51 @@ ICONS = {
     "pr": '<circle cx="5" cy="6" r="3"/><path d="M5 9v12"/><circle cx="19" cy="18" r="3"/>'
           '<path d="m15 9-3-3 3-3"/><path d="M12 6h5a2 2 0 0 1 2 2v7"/>',
 }
-OCTI_REPO = ("M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5"
+REPO_ICON = ("M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5"
              "a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05"
              "A2.495 2.495 0 0 1 2 11.5Zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8Z"
              "M5 12.25a.25.25 0 0 1 .25-.25h3.5a.25.25 0 0 1 .25.25v3.25a.25.25 0 0 1-.4.2"
              "l-1.45-1.087a.249.249 0 0 0-.3 0L5.4 15.7a.25.25 0 0 1-.4-.2Z")
 
-GITBLOCK_TOP = (32, [0x00000000, 0x00000000, 0x01c001c0, 0x06300630, 0x0a080a08, 0x12081208,
-                     0x11041104, 0x11841184, 0x12c412c4, 0x0d780d78, 0x0aa80aa8, 0x07500750,
-                     0x01e001e0, 0x00000000, 0x00000000, 0x00000000])
-GITBLOCK_SIDE = (32, [0x00000000] * 15 + [0xaaaaaaaa])
-ANGLE = 30
-BLOCK_W = 780
-RADAR_W, RADAR_H = 308, 234
-PIE_W, PIE_H = 468, 234
-RANGE = ["1", "10", "100", "1K", "10K"]
+BRICK_TOP = (32, [0x00000000, 0x00000000, 0x01c001c0, 0x06300630, 0x0a080a08, 0x12081208,
+                  0x11041104, 0x11841184, 0x12c412c4, 0x0d780d78, 0x0aa80aa8, 0x07500750,
+                  0x01e001e0, 0x00000000, 0x00000000, 0x00000000])
+BRICK_SIDE = (32, [0x00000000] * 15 + [0xaaaaaaaa])
+ISO_ANGLE = 30
+BLOCKS_WIDTH = 780
+RADAR_WIDTH, RADAR_HEIGHT = 308, 234
+RADAR_TICKS = ["1", "10", "100", "1K", "10K"]
+RADAR_KINDS = {
+    "Commit": "totalCommitContributions",
+    "Issue": "totalIssueContributions",
+    "PullReq": "totalPullRequestContributions",
+    "Review": "totalPullRequestReviewContributions",
+    "Repo": "totalRepositoryContributions",
+}
+PIE_WIDTH, PIE_HEIGHT = 468, 234
 
-GRID_W = 400.0
-SOURCES = {
+CALENDAR_WIDTH = 400.0
+TILE_CALENDARS = {
     "snake": {"origin": (2, 2), "cell": 12, "pitch": 16},
     "grid": {"origin": (10, 10), "cell": 10, "pitch": 13},
     "game": {"origin": (0, 15), "cell": 20, "pitch": 22},
     "life": {"origin": (30, 20), "cell": 11, "pitch": 14},
 }
-CARDS = ["grid", "blocks", "radar", "pie", "badge-repos", "badge-lang-1", "badge-lang-2",
-         "badge-lang-3", "badge-lang-4", "badge-email", "badge-site"]
-CARDS += [f"avatar-{i}" for i in range(1, TOP_REPOS + 1)]
-RING = {"dark": "#3d444d", "light": "#d1d9e0"}
 TILES = {
     "snake": ["snake.svg", "snake-light.svg"],
     "grid": ["grid.svg", "grid-light.svg"],
     "game": ["game.svg", "game-light.svg"],
     "life": ["life.svg", "life-light.svg"],
 }
+CARD_NAMES = ["grid", "blocks", "radar", "pie", "badge-repos", "badge-lang-1", "badge-lang-2",
+              "badge-lang-3", "badge-lang-4", "badge-email", "badge-site"]
+CARD_NAMES += [f"avatar-{i}" for i in range(1, TOP_REPOS + 1)]
+AVATAR_RING = {"dark": "#3d444d", "light": "#d1d9e0"}
+AVATAR_TYPES = ("image/png", "image/jpeg", "image/gif", "image/webp")
+EMPTY_SVG = ('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1" '
+             'viewBox="0 0 1 1" role="presentation"></svg>')
 
-QUERY_MAIN = """
+PROFILE_QUERY = """
 query ($login: String!) {
   user(login: $login) {
     createdAt
@@ -105,7 +120,7 @@ query ($login: String!) {
   }
 }
 """
-QUERY_WINDOW = """
+YEAR_QUERY = """
 query ($login: String!, $from: DateTime!, $to: DateTime!) {
   user(login: $login) {
     contributionsCollection(from: $from, to: $to) {
@@ -124,26 +139,28 @@ query ($login: String!, $from: DateTime!, $to: DateTime!) {
 """
 
 
-def esc(s):
-    return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+def escape(text):
+    return (str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             .replace('"', "&quot;"))
 
 
-def f2(v):
-    return f"{v:.2f}".rstrip("0").rstrip(".")
+def fmt(value):
+    return f"{value:.2f}".rstrip("0").rstrip(".")
 
 
-def shade(hex_color, factor):
-    h = hex_color.lstrip("#")
-    r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
-    return "#%02x%02x%02x" % tuple(min(255, round(c * factor)) for c in (r, g, b))
+def rgb(color):
+    digits = color.lstrip("#")
+    return [int(digits[i:i + 2], 16) for i in (0, 2, 4)]
 
 
-def luminance(hex_color):
-    h = hex_color.lstrip("#")
-    chan = [int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)]
-    lin = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in chan]
-    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+def shade(color, factor):
+    return "#%02x%02x%02x" % tuple(min(255, round(channel * factor)) for channel in rgb(color))
+
+
+def luminance(color):
+    linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+              for c in (channel / 255 for channel in rgb(color))]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
 
 
 def contrast(a, b):
@@ -151,18 +168,19 @@ def contrast(a, b):
     return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
 
 
-def best_text(bg):
-    return "#ffffff" if contrast("#ffffff", bg) >= contrast("#0d1117", bg) else "#0d1117"
+def text_color_on(background):
+    white, black = "#ffffff", "#0d1117"
+    return white if contrast(white, background) >= contrast(black, background) else black
 
 
-def text_width(s, size):
-    narrow = sum(c in "iljtfrI.,:;'|! " for c in s)
-    wide = sum(c in "MWmw@%" for c in s)
-    return size * (0.58 * len(s) - 0.22 * narrow + 0.20 * wide)
+def text_width(text, size):
+    narrow = sum(c in "iljtfrI.,:;'|! " for c in text)
+    wide = sum(c in "MWmw@%" for c in text)
+    return size * (0.58 * len(text) - 0.22 * narrow + 0.20 * wide)
 
 
-def clip(s, n=16):
-    return s if len(s) <= n else s[:n - 1] + "…"
+def truncate(text, limit=16):
+    return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
 def human_count(n):
@@ -181,36 +199,39 @@ def human_bytes(n):
     return f"{n:.0f}B"
 
 
-def lang_color(info, rank):
+def language_color(info, rank):
     color = info["color"] or ""
-    return color if re.fullmatch(r"#[0-9a-fA-F]{6}", color) else NULL_LANG[rank % len(NULL_LANG)]
+    if re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+        return color
+    return FALLBACK_LANGUAGE_COLORS[rank % len(FALLBACK_LANGUAGE_COLORS)]
 
 
-def theme_for(palette, mode):
-    return {**BASE[mode], "cells": PALETTES[palette][mode]}
+def theme_colors(palette, mode):
+    return {**BASE_COLORS[mode], "cells": PALETTES[palette][mode]}
 
 
-def fetch(url, data=None, headers={}):
-    req = urllib.request.Request(url, data=data, headers={"User-Agent": "profile-gen", **headers})
+def http_request(url, body=None, headers=None):
+    request = urllib.request.Request(
+        url, data=body, headers={"User-Agent": "profile-gen", **(headers or {})})
     for attempt in range(4):
         try:
-            with urllib.request.urlopen(req, timeout=30) as res:
-                body = res.read(4 << 20)
-                if len(body) == 4 << 20:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                content = response.read(MAX_RESPONSE)
+                if len(content) == MAX_RESPONSE:
                     raise SystemExit(f"{url}: response over 4 MB")
-                return res.headers.get_content_type(), body
-        except (OSError, http.client.HTTPException) as e:
-            code = getattr(e, "code", 503)
-            if attempt == 3 or code not in (429, 500, 502, 503, 504):
+                return response.headers.get_content_type(), content
+        except (OSError, http.client.HTTPException) as error:
+            status = getattr(error, "code", 503)
+            if attempt == 3 or status not in RETRY_STATUSES:
                 raise
-            retry_after = (getattr(e, "headers", None) or {}).get("Retry-After", "")
+            retry_after = (getattr(error, "headers", None) or {}).get("Retry-After", "")
             time.sleep(min(int(retry_after), 60) if retry_after.isdigit() else 2 ** attempt)
 
 
-def post(token, query, **variables):
+def graphql(token, query, **variables):
     body = json.dumps({"query": query, "variables": variables}).encode()
-    payload = json.loads(fetch(API, body, {"Authorization": f"bearer {token}",
-                                          "Content-Type": "application/json"})[1])
+    headers = {"Authorization": f"bearer {token}", "Content-Type": "application/json"}
+    payload = json.loads(http_request(API_URL, body, headers)[1])
     if "errors" in payload:
         raise SystemExit("graphql: " + json.dumps(payload["errors"]))
     return payload["data"]["user"]
@@ -220,176 +241,185 @@ def year_windows(created_at, now=None):
     start = datetime.datetime.fromisoformat(created_at.replace("Z", "+00:00"))
     start = start.replace(hour=0, minute=0, second=0, microsecond=0)
     now = now or datetime.datetime.now(datetime.timezone.utc)
-    step, tick = datetime.timedelta(days=365), datetime.timedelta(seconds=1)
-    fmt = "%Y-%m-%dT%H:%M:%SZ"
-    out, cur = [], start
-    while cur <= now:
-        out.append((cur.strftime(fmt), min(cur + step - tick, now).strftime(fmt)))
-        cur += step
-    return out
+    year, second = datetime.timedelta(days=365), datetime.timedelta(seconds=1)
+    iso = "%Y-%m-%dT%H:%M:%SZ"
+    windows = []
+    while start <= now:
+        windows.append((start.strftime(iso), min(start + year - second, now).strftime(iso)))
+        start += year
+    return windows
 
 
-def shape(main, windows, login):
-    cal = main["contributionsCollection"]["contributionCalendar"]
-    weeks = [[{"level": LEVELS[d["contributionLevel"]], "count": d["contributionCount"],
-               "weekday": d["weekday"]} for d in w["contributionDays"]]
-             for w in cal["weeks"]]
+def summarize(profile, years, login):
+    calendar = profile["contributionsCollection"]["contributionCalendar"]
+    weeks = [[{"level": LEVELS[day["contributionLevel"]], "count": day["contributionCount"],
+               "weekday": day["weekday"]} for day in week["contributionDays"]]
+             for week in calendar["weeks"]]
 
-    langs = {}
-    nodes = main["repositories"]["nodes"]
-    if len(nodes) >= 100:
+    languages = {}
+    repositories = profile["repositories"]["nodes"]
+    if len(repositories) >= 100:
         print("WARNING: hit the 100-repo cap, language totals are short")
-    for node in nodes:
-        for edge in node["languages"]["edges"]:
-            entry = langs.setdefault(edge["node"]["name"],
-                                     {"size": 0, "color": edge["node"]["color"]})
-            entry["size"] += edge["size"]
+    for repository in repositories:
+        for edge in repository["languages"]["edges"]:
+            language = languages.setdefault(edge["node"]["name"],
+                                            {"size": 0, "color": edge["node"]["color"]})
+            language["size"] += edge["size"]
 
-    radar = dict.fromkeys(["Commit", "Issue", "PullReq", "Review", "Repo"], 0)
-    keys = ["totalCommitContributions", "totalIssueContributions",
-            "totalPullRequestContributions", "totalPullRequestReviewContributions",
-            "totalRepositoryContributions"]
-    repos = {}
-    for w in windows:
-        cc = w["contributionsCollection"]
-        for name, key in zip(radar, keys):
-            radar[name] += cc[key]
-        by_repo = cc["commitContributionsByRepository"]
-        if len(by_repo) >= 100:
+    kinds = dict.fromkeys(RADAR_KINDS, 0)
+    contributed = {}
+    for year in years:
+        collection = year["contributionsCollection"]
+        for kind, field in RADAR_KINDS.items():
+            kinds[kind] += collection[field]
+        commits_by_repository = collection["commitContributionsByRepository"]
+        if len(commits_by_repository) >= 100:
             print("WARNING: hit the 100-repo cap on commitContributionsByRepository, "
                   "panel may be short")
-        for r in by_repo:
-            full = r["repository"]["nameWithOwner"]
-            entry = repos.setdefault(full, {"name": full,
-                                            "owner": r["repository"]["owner"]["login"],
-                                            "org": r["repository"]["owner"]["__typename"] == "Organization",
-                                            "count": 0})
-            entry["count"] += r["contributions"]["totalCount"]
-            entry["stars"] = r["repository"]["stargazerCount"]
+        for item in commits_by_repository:
+            repository = item["repository"]
+            entry = contributed.setdefault(repository["nameWithOwner"], {
+                "name": repository["nameWithOwner"],
+                "owner": repository["owner"]["login"],
+                "org": repository["owner"]["__typename"] == "Organization",
+                "count": 0,
+            })
+            entry["count"] += item["contributions"]["totalCount"]
+            entry["stars"] = repository["stargazerCount"]
 
-    ordered = sorted(repos.values(), key=lambda r: (-r["stars"], -r["count"], r["name"].lower()))
-    external = [r for r in ordered if r["owner"].lower() != login.lower()]
+    ranked = sorted(contributed.values(),
+                    key=lambda repo: (-repo["stars"], -repo["count"], repo["name"].lower()))
+    external = [repo for repo in ranked if repo["owner"].lower() != login.lower()]
 
     return {
         "login": login,
-        "total": cal["totalContributions"],
-        "commits": main["contributionsCollection"]["totalCommitContributions"],
+        "total": calendar["totalContributions"],
+        "commits": profile["contributionsCollection"]["totalCommitContributions"],
         "weeks": weeks,
-        "panel": external,
-        "external_count": len(external),
-        "langs": sorted(langs.items(), key=lambda kv: -kv[1]["size"]),
-        "radar": radar,
-        "repos": main["repositories"]["totalCount"],
+        "contributed": external,
+        "languages": sorted(languages.items(), key=lambda item: -item[1]["size"]),
+        "kinds": kinds,
+        "public_repos": profile["repositories"]["totalCount"],
     }
 
 
-def grid_box(key, weeks):
-    s = SOURCES[key]
-    ox, oy = s["origin"]
-    return ox, oy, (weeks - 1) * s["pitch"] + s["cell"], 6 * s["pitch"] + s["cell"]
+def calendar_box(tile, weeks):
+    grid = TILE_CALENDARS[tile]
+    x, y = grid["origin"]
+    return x, y, (weeks - 1) * grid["pitch"] + grid["cell"], 6 * grid["pitch"] + grid["cell"]
 
 
 def root_tag(svg):
     return re.search(r"""<svg(?:"[^"]*"|'[^']*'|[^"'>])*>""", svg).group(0)
 
 
-def parse_viewbox(svg):
+def read_viewbox(svg):
     head = root_tag(svg)
-    m = re.search(r"""\bviewBox=["']\s*([-\d.]+)[ ,]+([-\d.]+)[ ,]+([-\d.]+)[ ,]+([-\d.]+)""",
-                  head)
-    if m:
-        return tuple(float(g) for g in m.groups())
-    w = re.search(r"""\bwidth=["']([\d.]+)""", head)
-    h = re.search(r"""\bheight=["']([\d.]+)""", head)
-    if not (w and h):
+    viewbox = re.search(
+        r"""\bviewBox=["']\s*([-\d.]+)[ ,]+([-\d.]+)[ ,]+([-\d.]+)[ ,]+([-\d.]+)""", head)
+    if viewbox:
+        return tuple(float(value) for value in viewbox.groups())
+    width = re.search(r"""\bwidth=["']([\d.]+)""", head)
+    height = re.search(r"""\bheight=["']([\d.]+)""", head)
+    if not (width and height):
         raise SystemExit("tile SVG has neither a viewBox nor width/height")
-    return 0.0, 0.0, float(w.group(1)), float(h.group(1))
+    return 0.0, 0.0, float(width.group(1)), float(height.group(1))
 
 
-def tile_box(boxes, vbs):
-    L = R = T = B = gh = 0.0
-    for key, (gx, gy, gw, gz) in boxes.items():
-        vx, vy, vw, vh = vbs[key]
-        k = GRID_W / gw
-        L = max(L, (gx - vx) * k)
-        R = max(R, (vx + vw - gx - gw) * k)
-        T = max(T, (gy - vy) * k)
-        B = max(B, (vy + vh - gy - gz) * k)
-        gh = max(gh, gz * k)
-    return {"L": L, "T": T, "w": L + GRID_W + R, "h": T + gh + B}
+def common_frame(boxes, viewboxes):
+    left = right = top = bottom = height = 0.0
+    for tile, (x, y, width, grid_height) in boxes.items():
+        vx, vy, vw, vh = viewboxes[tile]
+        scale = CALENDAR_WIDTH / width
+        left = max(left, (x - vx) * scale)
+        right = max(right, (vx + vw - x - width) * scale)
+        top = max(top, (y - vy) * scale)
+        bottom = max(bottom, (vy + vh - y - grid_height) * scale)
+        height = max(height, grid_height * scale)
+    return {"left": left, "top": top,
+            "width": left + CALENDAR_WIDTH + right, "height": top + height + bottom}
 
 
-def retile(svg, key, weeks, box):
-    gx, gy, gw, _ = grid_box(key, weeks)
-    k = GRID_W / gw
-    vb = (gx - box["L"] / k, gy - box["T"] / k, box["w"] / k, box["h"] / k)
+def retile(svg, tile, weeks, frame):
+    x, y, width, _ = calendar_box(tile, weeks)
+    scale = CALENDAR_WIDTH / width
+    viewbox = (x - frame["left"] / scale, y - frame["top"] / scale,
+               frame["width"] / scale, frame["height"] / scale)
     head = root_tag(svg)
     start = svg.index(head)
-    stripped = re.sub(r"""\s+(viewBox|width|height|preserveAspectRatio)=("[^"]*"|'[^']*')""",
+    new_head = re.sub(r"""\s+(viewBox|width|height|preserveAspectRatio)=("[^"]*"|'[^']*')""",
                       "", head[:-1])
-    stripped += (f' viewBox="{f2(vb[0])} {f2(vb[1])} {f2(vb[2])} {f2(vb[3])}"'
-                 f' width="{f2(box["w"])}" height="{f2(box["h"])}"'
+    new_head += (f' viewBox="{" ".join(fmt(v) for v in viewbox)}"'
+                 f' width="{fmt(frame["width"])}" height="{fmt(frame["height"])}"'
                  ' preserveAspectRatio="xMidYMid meet" data-retiled="1">')
     body = re.sub(r'<rect width="100%" height="100%"[^>]*/>', "", svg[start + len(head):],
                   count=1)
-    return svg[:start] + stripped + body
+    return svg[:start] + new_head + body
+
+
+def gradient(gradient_id, start, end, x2=0, y2=1):
+    return (f'<linearGradient id="{gradient_id}" x1="0" y1="0" x2="{x2}" y2="{y2}">'
+            f'<stop offset="0" stop-color="{start}"/>'
+            f'<stop offset="1" stop-color="{end}"/></linearGradient>')
+
+
+def right_tab(x, width, height, radius, fill):
+    return (f'<path d="M{fmt(x)} 0h{fmt(width - radius)}a{radius} {radius} 0 0 1 {radius} {radius}'
+            f'v{height - 2 * radius}a{radius} {radius} 0 0 1 -{radius} {radius}'
+            f'h-{fmt(width - radius)}z" fill="{fill}"/>')
 
 
 def badge_svg(label, value, theme, accent, icon="", dot="", style="raised"):
-    FS, H, P, R = 11, 26, 9, 6
-    ico = 17 if (icon or dot) else 0
-    lw = (text_width(label, FS) if label else 0) + P * 2 + ico
-    vw = text_width(value, FS) + P * 2
-    W = lw + vw
-    mid = H / 2 + 4
+    size, height, pad, radius = 11, 26, 9, 6
+    mark_width = 17 if (icon or dot) else 0
+    label_width = (text_width(label, size) if label else 0) + pad * 2 + mark_width
+    value_width = text_width(value, size) + pad * 2
+    width = label_width + value_width
+    baseline = height / 2 + 4
+    label_color = theme["muted"]
+    value_color = text_color_on(shade(accent, 0.94))
 
     defs, under, over = [], [], []
-    lab_fill = theme["muted"]
-    val_fill = best_text(shade(accent, 0.94))
-
     if style == "raised":
-        defs.append(f'<linearGradient id="gl" x1="0" y1="0" x2="0" y2="1">'
-                    f'<stop offset="0" stop-color="{theme["line"]}"/>'
-                    f'<stop offset="1" stop-color="{shade(theme["line"], 0.72)}"/></linearGradient>'
-                    f'<linearGradient id="gv" x1="0" y1="0" x2="0" y2="1">'
-                    f'<stop offset="0" stop-color="{shade(accent, 1.28)}"/>'
-                    f'<stop offset="1" stop-color="{accent}"/></linearGradient>')
-        under.append(f'<rect y="2" width="{f2(W)}" height="{H - 2}" rx="{R}" '
+        defs.append(gradient("gl", theme["line"], shade(theme["line"], 0.72)))
+        defs.append(gradient("gv", shade(accent, 1.28), accent))
+        under.append(f'<rect y="2" width="{fmt(width)}" height="{height - 2}" rx="{radius}" '
                      f'fill="{shade(accent, 0.45)}"/>')
-        under.append(f'<rect width="{f2(lw + R)}" height="{H - 2}" rx="{R}" fill="url(#gl)"/>')
-        under.append(f'<path d="M{f2(lw)} 0h{f2(vw - R)}a{R} {R} 0 0 1 {R} {R}v{H - 2 - 2 * R}'
-                     f'a{R} {R} 0 0 1 -{R} {R}h-{f2(vw - R)}z" fill="url(#gv)"/>')
-        over.append(f'<path d="M{R} 0.5h{f2(W - 2 * R)}" stroke="#ffffff" '
+        under.append(f'<rect width="{fmt(label_width + radius)}" height="{height - 2}" '
+                     f'rx="{radius}" fill="url(#gl)"/>')
+        under.append(right_tab(label_width, value_width, height - 2, radius, "url(#gv)"))
+        over.append(f'<path d="M{radius} 0.5h{fmt(width - 2 * radius)}" stroke="#ffffff" '
                     f'stroke-opacity="0.28"/>')
     elif style == "gradient":
-        defs.append(f'<linearGradient id="gv" x1="0" y1="0" x2="1" y2="1">'
-                    f'<stop offset="0" stop-color="{shade(accent, 1.25)}"/>'
-                    f'<stop offset="1" stop-color="{shade(accent, 0.62)}"/></linearGradient>')
-        under.append(f'<rect width="{f2(W)}" height="{H}" rx="{R}" fill="{theme["line"]}"/>')
-        under.append(f'<path d="M{f2(lw)} 0h{f2(vw - R)}a{R} {R} 0 0 1 {R} {R}v{H - 2 * R}'
-                     f'a{R} {R} 0 0 1 -{R} {R}h-{f2(vw - R)}z" fill="url(#gv)"/>')
+        defs.append(gradient("gv", shade(accent, 1.25), shade(accent, 0.62), x2=1))
+        under.append(f'<rect width="{fmt(width)}" height="{height}" rx="{radius}" '
+                     f'fill="{theme["line"]}"/>')
+        under.append(right_tab(label_width, value_width, height, radius, "url(#gv)"))
     else:
-        under.append(f'<rect x="0.5" y="0.5" width="{f2(W - 1)}" height="{H - 1}" rx="{R}" '
-                     f'fill="none" stroke="{accent}"/>')
-        under.append(f'<path d="M{f2(lw)} 0.5v{H - 1}" stroke="{accent}"/>')
-        val_fill = accent
+        under.append(f'<rect x="0.5" y="0.5" width="{fmt(width - 1)}" height="{height - 1}" '
+                     f'rx="{radius}" fill="none" stroke="{accent}"/>')
+        under.append(f'<path d="M{fmt(label_width)} 0.5v{height - 1}" stroke="{accent}"/>')
+        value_color = accent
 
     mark = ""
     if icon:
-        ix = P if label else (lw - 12) / 2
-        mark = (f'<g transform="translate({f2(ix)},{(H - 12) / 2}) scale(0.5)" fill="none" '
-                f'stroke="{lab_fill}" stroke-width="2.4" stroke-linecap="round" '
+        icon_x = pad if label else (label_width - 12) / 2
+        mark = (f'<g transform="translate({fmt(icon_x)},{(height - 12) / 2}) scale(0.5)" '
+                f'fill="none" stroke="{label_color}" stroke-width="2.4" stroke-linecap="round" '
                 f'stroke-linejoin="round">{ICONS[icon]}</g>')
     elif dot:
-        mark = f'<circle cx="{P + 4}" cy="{H / 2}" r="4" fill="{dot}"/>'
+        mark = f'<circle cx="{pad + 4}" cy="{height / 2}" r="4" fill="{dot}"/>'
 
-    lab = (f'<text x="{f2(P + ico)}" y="{f2(mid)}" font-family="{FONT}" font-size="{FS}" '
-           f'fill="{lab_fill}">{esc(label)}</text>' if label else "")
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{W:.0f}" height="{H}" \
-viewBox="0 0 {f2(W)} {H}" role="img" aria-label="{esc(label or icon)}: {esc(value)}">
-<defs>{"".join(defs)}</defs>{"".join(under)}{mark}{lab}{"".join(over)}
-<text x="{f2(lw + P)}" y="{f2(mid)}" font-family="{FONT}" font-size="{FS}" \
-fill="{val_fill}" font-weight="600">{esc(value)}</text>
+    label_text = ""
+    if label:
+        label_text = (f'<text x="{fmt(pad + mark_width)}" y="{fmt(baseline)}" font-family="{FONT}" '
+                      f'font-size="{size}" fill="{label_color}">{escape(label)}</text>')
+
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width:.0f}" height="{height}" \
+viewBox="0 0 {fmt(width)} {height}" role="img" aria-label="{escape(label or icon)}: {escape(value)}">
+<defs>{"".join(defs)}</defs>{"".join(under)}{mark}{label_text}{"".join(over)}
+<text x="{fmt(label_width + pad)}" y="{fmt(baseline)}" font-family="{FONT}" font-size="{size}" \
+fill="{value_color}" font-weight="600">{escape(value)}</text>
 </svg>"""
 
 
@@ -400,357 +430,407 @@ def link_badges(theme, accent):
     }
 
 
-def badges(data, theme, accent):
-    out = {"badge-repos.svg": badge_svg("contributed in", f"{data['external_count']} repos",
-                                        theme, accent, icon="pr", style="raised")}
-    langs = data["langs"][:4]
+def stat_badges(data, theme, accent):
+    files = {"badge-repos.svg": badge_svg("contributed in", f"{len(data['contributed'])} repos",
+                                          theme, accent, icon="pr", style="raised")}
+    top_languages = data["languages"][:4]
     for rank in range(1, 5):
-        if rank <= len(langs):
-            name, info = langs[rank - 1]
-            colour = lang_color(info, rank - 1)
-            svg = badge_svg(name.lower(), human_bytes(info["size"]), theme, colour,
-                            dot=colour, style="gradient")
-        else:
-            svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1" '
-                   'viewBox="0 0 1 1" role="presentation"></svg>')
-        out[f"badge-lang-{rank}.svg"] = svg
-    return out
+        svg = EMPTY_SVG
+        if rank <= len(top_languages):
+            name, info = top_languages[rank - 1]
+            color = language_color(info, rank - 1)
+            svg = badge_svg(name.lower(), human_bytes(info["size"]), theme, color,
+                            dot=color, style="gradient")
+        files[f"badge-lang-{rank}.svg"] = svg
+    return files
 
 
 def grid_svg(weeks, theme):
-    s = SOURCES["grid"]
-    cell, pitch, pad = s["cell"], s["pitch"], s["origin"][0]
-    n = len(weeks)
-    W = n * pitch - (pitch - cell) + pad * 2
-    H = 7 * pitch - (pitch - cell) + pad * 2
+    grid = TILE_CALENDARS["grid"]
+    cell, pitch, pad = grid["cell"], grid["pitch"], grid["origin"][0]
+    count = len(weeks)
+    width = count * pitch - (pitch - cell) + pad * 2
+    height = 7 * pitch - (pitch - cell) + pad * 2
 
-    cells, css = [], []
+    cells, keyframes = [], []
     for x, week in enumerate(weeks):
-        pct = round(x / max(1, n - 1) * 60, 2)
-        css.append(f"@keyframes k{x}{{0%,{pct}%{{opacity:0}}{min(pct + 4, 100)}%,100%"
-                   f"{{opacity:1}}}}.w{x}{{animation-name:k{x}}}")
+        appear = round(x / max(1, count - 1) * 60, 2)
+        keyframes.append(f"@keyframes k{x}{{0%,{appear}%{{opacity:0}}{min(appear + 4, 100)}%,100%"
+                         f"{{opacity:1}}}}.w{x}{{animation-name:k{x}}}")
         for day in week:
             cells.append(f'<rect class="c w{x}" x="{pad + x * pitch}" '
                          f'y="{pad + day["weekday"] * pitch}" width="{cell}" height="{cell}" '
                          f'rx="2" fill="{theme["cells"][day["level"]]}"/>')
-    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}" '
-            f'height="{H}" role="img" aria-label="contribution calendar">'
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" '
+            f'width="{width}" height="{height}" role="img" aria-label="contribution calendar">'
             f'<style>.c{{animation-duration:4200ms;animation-timing-function:ease-out;'
-            f'animation-iteration-count:1;animation-fill-mode:both}}{"".join(css)}</style>'
+            f'animation-iteration-count:1;animation-fill-mode:both}}{"".join(keyframes)}</style>'
             f'{"".join(cells)}</svg>')
 
 
-def face_pattern(pid, pat, bg, fg):
-    width, bitmap = pat
-    d = "".join(f"M{x} {y}h1v1h-1z" for y, bits in enumerate(bitmap) for x in range(width)
-                if bits & (1 << (width - x - 1)))
-    return (f'<pattern id="{pid}" x="0" y="0" width="{width}" height="{len(bitmap)}" '
+def bitmap_pattern(pattern_id, bitmap, background, ink):
+    width, rows = bitmap
+    path = "".join(f"M{x} {y}h1v1h-1z" for y, bits in enumerate(rows) for x in range(width)
+                   if bits & (1 << (width - x - 1)))
+    return (f'<pattern id="{pattern_id}" x="0" y="0" width="{width}" height="{len(rows)}" '
             f'patternUnits="userSpaceOnUse">'
-            f'<rect width="{width}" height="{len(bitmap)}" fill="{bg}"/>'
-            f'<path fill="{fg}" d="{d}"/></pattern>')
+            f'<rect width="{width}" height="{len(rows)}" fill="{background}"/>'
+            f'<path fill="{ink}" d="{path}"/></pattern>')
+
+
+def card_svg_tag(width, height, label):
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" '
+            f'width="{width}" height="{height}" font-family="{FONT}" role="img" '
+            f'aria-label="{label}">')
+
+
+def card_frame(width, height, theme):
+    return (f'<rect x="0.5" y="0.5" width="{width - 1}" height="{height - 1}" rx="14" '
+            f'fill="{theme["card"]}" stroke="{theme["line"]}"/>')
+
+
+def svg_text(x, y, size, fill, content, bold=False):
+    weight = ' font-weight="bold"' if bold else ""
+    return (f'<text x="{fmt(x)}" y="{fmt(y)}" font-size="{fmt(size)}"{weight} '
+            f'fill="{fill}">{content}</text>')
+
+
+def bar_height(count):
+    return math.log10(count / 20 + 1) * 144 + 3
 
 
 def blocks_svg(data, theme):
-    c, weeks = theme["cells"], data["weeks"]
-    n = len(weeks)
-    W, K = BLOCK_W, BLOCK_W / 1280
-    dx = W / 64
-    dy = dx * math.tan(math.radians(ANGLE))
-    dxx, dyy = dx * 0.9, dy * 0.9
+    weeks = data["weeks"]
+    width, scale = BLOCKS_WIDTH, BLOCKS_WIDTH / 1280
+    step_x = width / 64
+    step_y = step_x * math.tan(math.radians(ISO_ANGLE))
+    face_x, face_y = step_x * 0.9, step_y * 0.9
 
-    tallest = max((d["count"] for wk in weeks for d in wk), default=0)
-    head = math.ceil(math.log10(tallest / 20 + 1) * 144 + 3) + 14
-    foot = round(46 * K) + 18
-    off_x, off_y = dx * 7, float(head)
-    H = math.ceil(off_y + (n + 5) * dy + foot)
+    tallest = max((day["count"] for week in weeks for day in week), default=0)
+    header = math.ceil(bar_height(tallest)) + 14
+    footer = round(46 * scale) + 18
+    origin_x, origin_y = step_x * 7, float(header)
+    height = math.ceil(origin_y + (len(weeks) + 5) * step_y + footer)
 
-    defs = []
-    for lvl in range(5):
-        top, stud = c[lvl], shade(c[lvl], 0.5 if lvl else 1.6)
-        defs.append(face_pattern(f"p{lvl}t", GITBLOCK_TOP, top, stud))
-        defs.append(face_pattern(f"p{lvl}l", GITBLOCK_SIDE, shade(top, 0.84), shade(stud, 0.84)))
-        defs.append(face_pattern(f"p{lvl}r", GITBLOCK_SIDE, shade(top, 0.70), shade(stud, 0.70)))
+    patterns = []
+    for level, color in enumerate(theme["cells"]):
+        stud = shade(color, 0.5 if level else 1.6)
+        patterns.append(bitmap_pattern(f"p{level}t", BRICK_TOP, color, stud))
+        patterns.append(bitmap_pattern(f"p{level}l", BRICK_SIDE,
+                                       shade(color, 0.84), shade(stud, 0.84)))
+        patterns.append(bitmap_pattern(f"p{level}r", BRICK_SIDE,
+                                       shade(color, 0.70), shade(stud, 0.70)))
 
-    tw, sw = GITBLOCK_TOP[0], GITBLOCK_SIDE[0]
-    s_top = dxx / tw
-    s_side = math.hypot(dxx, dyy) / sw
-    skew_x = math.degrees(math.atan(dxx / 2 / dyy))
+    top_size, side_size = BRICK_TOP[0], BRICK_SIDE[0]
+    top_scale = face_x / top_size
+    side_scale = math.hypot(face_x, face_y) / side_size
+    skew = math.degrees(math.atan(face_x / 2 / face_y))
 
     bars = []
     for week, days in enumerate(weeks):
         for day in days:
-            dow, lvl = day["weekday"], day["level"]
-            h = math.log10(day["count"] / 20 + 1) * 144 + 3
-            bx = off_x + (week - dow) * dx
-            by = off_y + (week + dow) * dy
+            weekday, level = day["weekday"], day["level"]
+            bar = bar_height(day["count"])
+            x = origin_x + (week - weekday) * step_x
+            y = origin_y + (week + weekday) * step_y
             grow = rise = ""
-            if lvl:
+            if level:
                 grow = (f'<animateTransform attributeName="transform" type="translate" '
-                        f'values="{f2(bx)} {f2(by - 3)};{f2(bx)} {f2(by - h)}" dur="3s" '
+                        f'values="{fmt(x)} {fmt(y - 3)};{fmt(x)} {fmt(y - bar)}" dur="3s" '
                         f'repeatCount="1"/>')
                 rise = (f'<animate attributeName="height" '
-                        f'values="{f2(3 / s_side)};{f2(h / s_side)}" dur="3s" repeatCount="1"/>')
+                        f'values="{fmt(3 / side_scale)};{fmt(bar / side_scale)}" dur="3s" '
+                        f'repeatCount="1"/>')
             bars.append(
-                f'<g transform="translate({f2(bx)} {f2(by - h)})">{grow}'
-                f'<rect width="{tw}" height="{tw}" fill="url(#p{lvl}t)" '
-                f'transform="skewY({-ANGLE}) skewX({f2(skew_x)}) '
-                f'scale({s_top:.4f} {2 * dyy / tw:.4f})"/>'
-                f'<rect width="{sw}" height="{f2(h / s_side)}" fill="url(#p{lvl}l)" '
-                f'transform="skewY({ANGLE}) scale({dxx / sw:.4f} {s_side:.4f})">{rise}</rect>'
-                f'<rect width="{sw}" height="{f2(h / s_side)}" fill="url(#p{lvl}r)" '
-                f'transform="translate({f2(dxx)} {f2(dyy)}) skewY({-ANGLE}) '
-                f'scale({dxx / sw:.4f} {s_side:.4f})">{rise}</rect></g>')
+                f'<g transform="translate({fmt(x)} {fmt(y - bar)})">{grow}'
+                f'<rect width="{top_size}" height="{top_size}" fill="url(#p{level}t)" '
+                f'transform="skewY({-ISO_ANGLE}) skewX({fmt(skew)}) '
+                f'scale({top_scale:.4f} {2 * face_y / top_size:.4f})"/>'
+                f'<rect width="{side_size}" height="{fmt(bar / side_scale)}" fill="url(#p{level}l)" '
+                f'transform="skewY({ISO_ANGLE}) scale({face_x / side_size:.4f} {side_scale:.4f})">'
+                f'{rise}</rect>'
+                f'<rect width="{side_size}" height="{fmt(bar / side_scale)}" fill="url(#p{level}r)" '
+                f'transform="translate({fmt(face_x)} {fmt(face_y)}) skewY({-ISO_ANGLE}) '
+                f'scale({face_x / side_size:.4f} {side_scale:.4f})">{rise}</rect></g>')
 
-    bottom, big, small = H - 20 * K, 32 * K, 24 * K
-    n_total, n_repos = f"{data['commits']:,}", f"{data['repos']:,}"
-    label_total, label_repos = "commits in the last year", "public repos"
-    x0 = (W - (text_width(n_total, big) + 8 * K + text_width(label_total, small) + 60 * K
-               + 42 * K + text_width(n_repos, big) + 8 * K + text_width(label_repos, small))) / 2
-    x_label = x0 + text_width(n_total, big) + 8 * K
-    x_icon = x_label + text_width(label_total, small) + 60 * K
-    x_repos = x_icon + 42 * K
-    x_label2 = x_repos + text_width(n_repos, big) + 8 * K
+    baseline, big, small = height - 20 * scale, 32 * scale, 24 * scale
+    commits, repos = f"{data['commits']:,}", f"{data['public_repos']:,}"
+    commits_label, repos_label = "commits in the last year", "public repos"
+    commits_x = (width - (text_width(commits, big) + 8 * scale + text_width(commits_label, small)
+                          + 60 * scale + 42 * scale + text_width(repos, big) + 8 * scale
+                          + text_width(repos_label, small))) / 2
+    commits_label_x = commits_x + text_width(commits, big) + 8 * scale
+    icon_x = commits_label_x + text_width(commits_label, small) + 60 * scale
+    repos_x = icon_x + 42 * scale
+    repos_label_x = repos_x + text_width(repos, big) + 8 * scale
 
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}" height="{H}" \
-font-family="{FONT}" role="img" aria-label="{data['commits']} commits in the last year, contributions as 3d blocks">
-<defs>{"".join(defs)}</defs>
-<rect x="0.5" y="0.5" width="{W - 1}" height="{H - 1}" rx="14" fill="{theme['card']}" stroke="{theme['line']}"/>
-{"".join(bars)}
-<text x="{f2(x0)}" y="{f2(bottom)}" font-size="{f2(big)}" font-weight="bold" fill="{theme['fg']}">{n_total}</text>
-<text x="{f2(x_label)}" y="{f2(bottom)}" font-size="{f2(small)}" fill="{theme['muted']}">{label_total}</text>
-<g transform="translate({f2(x_icon)} {f2(bottom - 28 * K)}) scale({f2(2 * K)})">\
-<path fill-rule="evenodd" d="{OCTI_REPO}" fill="{theme['fg']}"/></g>
-<text x="{f2(x_repos)}" y="{f2(bottom)}" font-size="{f2(big)}" font-weight="bold" fill="{theme['fg']}">{n_repos}</text>
-<text x="{f2(x_label2)}" y="{f2(bottom)}" font-size="{f2(small)}" fill="{theme['muted']}">{label_repos}</text>
-</svg>"""
+    label = f"{data['commits']} commits in the last year, contributions as 3d blocks"
+    return "\n".join([
+        card_svg_tag(width, height, label),
+        f'<defs>{"".join(patterns)}</defs>',
+        card_frame(width, height, theme),
+        "".join(bars),
+        svg_text(commits_x, baseline, big, theme["fg"], commits, bold=True),
+        svg_text(commits_label_x, baseline, small, theme["muted"], commits_label),
+        f'<g transform="translate({fmt(icon_x)} {fmt(baseline - 28 * scale)}) '
+        f'scale({fmt(2 * scale)})"><path fill-rule="evenodd" d="{REPO_ICON}" '
+        f'fill="{theme["fg"]}"/></g>',
+        svg_text(repos_x, baseline, big, theme["fg"], repos, bold=True),
+        svg_text(repos_label_x, baseline, small, theme["muted"], repos_label),
+        "</svg>",
+    ])
 
 
 def radar_svg(data, theme, accent):
-    w, h = RADAR_W, RADAR_H
-    lv_n = len(RANGE)
-    radius, cx, cy = (h / 2) * 0.8, w / 2, (h / 2) * 1.1
-    items = list(data["radar"].items())
-    n = len(items)
+    width, height = RADAR_WIDTH, RADAR_HEIGHT
+    rings = len(RADAR_TICKS)
+    radius, center_x, center_y = (height / 2) * 0.8, width / 2, (height / 2) * 1.1
+    kinds = list(data["kinds"].items())
+    spokes = len(kinds)
 
-    def px(level, i):
-        return f2(radius * (level / lv_n) * math.sin(i / n * math.tau))
+    def x_at(ring, spoke):
+        return fmt(radius * (ring / rings) * math.sin(spoke / spokes * math.tau))
 
-    def py(level, i):
-        return f2(radius * (level / lv_n) * -math.cos(i / n * math.tau))
+    def y_at(ring, spoke):
+        return fmt(radius * (ring / rings) * -math.cos(spoke / spokes * math.tau))
 
-    def to_level(v):
-        return 0.8 if v < 1 else min(math.log10(v), 4) + 1
+    def ring_for(value):
+        return 0.8 if value < 1 else min(math.log10(value), 4) + 1
 
-    dash = f'stroke="{theme["muted"]}" stroke-dasharray="4 4" stroke-width="1"'
+    dashed = f'stroke="{theme["muted"]}" stroke-dasharray="4 4" stroke-width="1"'
     web = []
-    for j in range(1, lv_n + 1):
-        for i in range(n):
-            web.append(f'<line x1="{px(j, i)}" y1="{py(j, i)}" x2="{px(j, i + 1)}" '
-                       f'y2="{py(j, i + 1)}" {dash}/>')
-    for i, label in enumerate(RANGE):
-        web.append(f'<text x="{f2(radius / 50)}" y="{f2(-radius * ((i + 1) / lv_n))}" '
-                   f'font-size="{f2(radius / 12)}" fill="{theme["muted"]}">{label}</text>')
-    for i, (name, value) in enumerate(items):
-        web.append(f'<line x1="{px(1, i)}" y1="{py(1, i)}" x2="{px(lv_n, i)}" '
-                   f'y2="{py(lv_n, i)}" {dash}/>'
-                   f'<text x="{px(1.25 * lv_n, i)}" y="{py(1.17 * lv_n, i)}" '
-                   f'font-size="{f2(radius / 7.5)}" text-anchor="middle" '
-                   f'dominant-baseline="middle" fill="{theme["fg"]}">{esc(name)}'
+    for ring in range(1, rings + 1):
+        for spoke in range(spokes):
+            web.append(f'<line x1="{x_at(ring, spoke)}" y1="{y_at(ring, spoke)}" '
+                       f'x2="{x_at(ring, spoke + 1)}" y2="{y_at(ring, spoke + 1)}" {dashed}/>')
+    for i, tick in enumerate(RADAR_TICKS):
+        web.append(f'<text x="{fmt(radius / 50)}" y="{fmt(-radius * ((i + 1) / rings))}" '
+                   f'font-size="{fmt(radius / 12)}" fill="{theme["muted"]}">{tick}</text>')
+    for spoke, (name, value) in enumerate(kinds):
+        web.append(f'<line x1="{x_at(1, spoke)}" y1="{y_at(1, spoke)}" '
+                   f'x2="{x_at(rings, spoke)}" y2="{y_at(rings, spoke)}" {dashed}/>'
+                   f'<text x="{x_at(1.25 * rings, spoke)}" y="{y_at(1.17 * rings, spoke)}" '
+                   f'font-size="{fmt(radius / 7.5)}" text-anchor="middle" '
+                   f'dominant-baseline="middle" fill="{theme["fg"]}">{escape(name)}'
                    f'<title>{value}</title></text>')
 
-    pts = " ".join(f"{px(to_level(v), i)},{py(to_level(v), i)}"
-                   for i, (_, v) in enumerate(items))
-    pts0 = " ".join(f"{px(0.8, i)},{py(0.8, i)}" for i in range(n))
+    points = " ".join(f"{x_at(ring_for(value), spoke)},{y_at(ring_for(value), spoke)}"
+                      for spoke, (_, value) in enumerate(kinds))
+    start_points = " ".join(f"{x_at(0.8, spoke)},{y_at(0.8, spoke)}" for spoke in range(spokes))
 
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}" \
-font-family="{FONT}" role="img" aria-label="contributions by kind, all time">
-<rect x="0.5" y="0.5" width="{w - 1}" height="{h - 1}" rx="14" fill="{theme['card']}" stroke="{theme['line']}"/>
-<g transform="translate({f2(cx)} {f2(cy)})">{"".join(web)}
-<polygon points="{pts}" fill="{accent}" fill-opacity="0.5" stroke="{accent}" stroke-width="4">
-<animate attributeName="points" values="{pts0};{pts}" dur="3s" repeatCount="1"/></polygon>
-</g></svg>"""
+    return "\n".join([
+        card_svg_tag(width, height, "contributions by kind, all time"),
+        card_frame(width, height, theme),
+        f'<g transform="translate({fmt(center_x)} {fmt(center_y)})">{"".join(web)}',
+        f'<polygon points="{points}" fill="{accent}" fill-opacity="0.5" stroke="{accent}" '
+        f'stroke-width="4">',
+        f'<animate attributeName="points" values="{start_points};{points}" dur="3s" '
+        f'repeatCount="1"/></polygon>',
+        "</g></svg>",
+    ])
 
 
 def pie_svg(data, theme):
-    w, h = PIE_W, PIE_H
-    top = [(name, info["size"], lang_color(info, i))
-           for i, (name, info) in enumerate(data["langs"][:5])]
-    rest = sum(info["size"] for _, info in data["langs"][5:])
+    width, height = PIE_WIDTH, PIE_HEIGHT
+    slices = [(name, info["size"], language_color(info, i))
+              for i, (name, info) in enumerate(data["languages"][:5])]
+    rest = sum(info["size"] for _, info in data["languages"][5:])
     if rest > 0:
-        top.append(("other", rest, "#444444"))
-    total = sum(size for _, size, _ in top) or 1
+        slices.append(("other", rest, "#444444"))
+    total = sum(size for _, size, _ in slices) or 1
 
-    radius = h / 2
-    ro, ri = radius - radius / 10, radius / 2
-    row, steps = 8, 5
-    offset = (row - len(top)) / 2 + 0.5
-    fs = h / row / 1.5
+    radius = height / 2
+    outer, inner = radius - radius / 10, radius / 2
+    rows, fade_steps = 8, 5
+    first_row = (rows - len(slices)) / 2 + 0.5
+    font_size = height / rows / 1.5
 
-    def anim(i):
-        values = ";".join(str(0 if j < i else min((j - i) / steps, 1))
-                          for j in range(len(top) + steps))
-        return f'<animate attributeName="fill-opacity" values="{values}" dur="3s" repeatCount="1"/>'
+    def fade_in(i):
+        values = ";".join(str(0 if j < i else min((j - i) / fade_steps, 1))
+                          for j in range(len(slices) + fade_steps))
+        return (f'<animate attributeName="fill-opacity" values="{values}" dur="3s" '
+                f'repeatCount="1"/>')
 
-    def pt(r, a):
-        return f"{r * math.sin(a):.2f} {-r * math.cos(a):.2f}"
+    def point(r, angle):
+        return f"{r * math.sin(angle):.2f} {-r * math.cos(angle):.2f}"
 
-    arcs, keys, angle = [], [], 0.0
-    for i, (name, size, colour) in enumerate(top):
-        a0 = angle
+    arcs, legend, angle = [], [], 0.0
+    for i, (name, size, color) in enumerate(slices):
+        start = angle
         angle += size / total * math.tau
-        a1 = min(angle, a0 + math.tau - 1e-4)
-        big = 1 if a1 - a0 > math.pi else 0
-        d = (f"M{pt(ro, a0)}A{ro} {ro} 0 {big} 1 {pt(ro, a1)}"
-             f"L{pt(ri, a1)}A{ri} {ri} 0 {big} 0 {pt(ri, a0)}Z")
-        arcs.append(f'<path d="{d}" fill="{colour}" stroke="{theme["card"]}" stroke-width="2">'
-                    f'<title>{esc(name)} {human_bytes(size)}</title>{anim(i)}</path>')
-        ly = (i + offset) * (h / row)
-        keys.append(f'<rect x="0" y="{f2(ly - fs / 2)}" width="{f2(fs)}" height="{f2(fs)}" '
-                    f'fill="{colour}" stroke="{theme["card"]}">{anim(i)}</rect>'
-                    f'<text x="{f2(fs * 1.2)}" y="{f2(ly)}" dominant-baseline="middle" '
-                    f'font-size="{f2(fs)}" fill="{theme["fg"]}">{esc(clip(name))}'
-                    f'<title>{esc(name)}</title>{anim(i)}</text>')
+        end = min(angle, start + math.tau - 1e-4)
+        large = 1 if end - start > math.pi else 0
+        path = (f"M{point(outer, start)}A{outer} {outer} 0 {large} 1 {point(outer, end)}"
+                f"L{point(inner, end)}A{inner} {inner} 0 {large} 0 {point(inner, start)}Z")
+        arcs.append(f'<path d="{path}" fill="{color}" stroke="{theme["card"]}" stroke-width="2">'
+                    f'<title>{escape(name)} {human_bytes(size)}</title>{fade_in(i)}</path>')
+        row_y = (i + first_row) * (height / rows)
+        legend.append(f'<rect x="0" y="{fmt(row_y - font_size / 2)}" width="{fmt(font_size)}" '
+                      f'height="{fmt(font_size)}" fill="{color}" stroke="{theme["card"]}">'
+                      f'{fade_in(i)}</rect>'
+                      f'<text x="{fmt(font_size * 1.2)}" y="{fmt(row_y)}" dominant-baseline="middle" '
+                      f'font-size="{fmt(font_size)}" fill="{theme["fg"]}">{escape(truncate(name))}'
+                      f'<title>{escape(name)}</title>{fade_in(i)}</text>')
 
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}" \
-font-family="{FONT}" role="img" aria-label="languages by size">
-<rect x="0.5" y="0.5" width="{w - 1}" height="{h - 1}" rx="14" fill="{theme['card']}" stroke="{theme['line']}"/>
-<g transform="translate({f2(radius * 2.1)} 0)">{"".join(keys)}</g>
-<g transform="translate({f2(radius)} {f2(radius)})">{"".join(arcs)}</g></svg>"""
+    return "\n".join([
+        card_svg_tag(width, height, "languages by size"),
+        card_frame(width, height, theme),
+        f'<g transform="translate({fmt(radius * 2.1)} 0)">{"".join(legend)}</g>',
+        f'<g transform="translate({fmt(radius)} {fmt(radius)})">{"".join(arcs)}</g></svg>',
+    ])
 
 
-def avatar_svg(ctype, png, org, ring):
-    r = 6 if org else 13
+def avatar_svg(content_type, image, is_org, ring):
+    radius = 6 if is_org else 13
+    encoded = base64.b64encode(image).decode()
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 26 26" width="26" height="26" '
-            f'role="img" aria-label="avatar"><clipPath id="c"><rect width="26" height="26" rx="{r}"/></clipPath>'
-            f'<image href="data:{ctype};base64,{base64.b64encode(png).decode()}" width="26" height="26" '
-            f'clip-path="url(#c)"/><rect x="0.5" y="0.5" width="25" height="25" rx="{r - 0.5}" '
-            f'fill="none" stroke="{ring}"/></svg>')
+            f'role="img" aria-label="avatar"><clipPath id="c"><rect width="26" height="26" '
+            f'rx="{radius}"/></clipPath>'
+            f'<image href="data:{content_type};base64,{encoded}" width="26" height="26" '
+            f'clip-path="url(#c)"/><rect x="0.5" y="0.5" width="25" height="25" '
+            f'rx="{radius - 0.5}" fill="none" stroke="{ring}"/></svg>')
 
 
 def avatars(data):
     files = {}
-    for i, r in enumerate(data["panel"][:TOP_REPOS], 1):
-        ctype, png = fetch(f"https://github.com/{urllib.parse.quote(r['owner'], safe='')}.png?size=64")
-        if ctype not in ("image/png", "image/jpeg", "image/gif", "image/webp"):
-            raise SystemExit(f"avatar for {r['owner']}: unexpected content type {ctype}")
-        for mode in ("dark", "light"):
-            sfx = "" if mode == "dark" else "-light"
-            files[f"avatar-{i}{sfx}.svg"] = avatar_svg(ctype, png, r["org"], RING[mode])
+    for i, repo in enumerate(data["contributed"][:TOP_REPOS], 1):
+        owner = urllib.parse.quote(repo["owner"], safe="")
+        content_type, image = http_request(f"https://github.com/{owner}.png?size=64")
+        if content_type not in AVATAR_TYPES:
+            raise SystemExit(f"avatar for {repo['owner']}: unexpected content type {content_type}")
+        for mode, suffix in MODES:
+            files[f"avatar-{i}{suffix}.svg"] = avatar_svg(content_type, image, repo["org"],
+                                                         AVATAR_RING[mode])
     return files
+
+
+def themed_image(dark_url, light_url, **attributes):
+    extra = "".join(f' {name}="{value}"' for name, value in attributes.items())
+    return (f'<picture><source media="(prefers-color-scheme: light)" srcset="{light_url}">'
+            f'<img src="{dark_url}"{extra}></picture>')
 
 
 def panel_html(data):
     raw = f"https://raw.githubusercontent.com/{data['login']}/{data['login']}"
-    star = (f'<picture><source media="(prefers-color-scheme: light)" srcset="{raw}/main/star-light.svg">'
-            f'<img src="{raw}/main/star.svg" width="14" height="14" align="absmiddle" alt="stars"></picture>')
+    star = themed_image(f"{raw}/main/star.svg", f"{raw}/main/star-light.svg",
+                        width=14, height=14, align="absmiddle", alt="stars")
     rows = []
-    for i, r in enumerate(data["panel"][:TOP_REPOS], 1):
-        url = f"https://github.com/{esc(r['name'])}"
-        avatar = (f'<picture><source media="(prefers-color-scheme: light)" srcset="{raw}/output/avatar-{i}-light.svg">'
-                  f'<img src="{raw}/output/avatar-{i}.svg" width="26" height="26" align="absmiddle" alt=""></picture>')
-        stars = f' <code>{star} {human_count(r["stars"])}</code>' if r.get("stars") else ""
-        rows.append(f'<tr><td><a href="{url}">{avatar}</a> <a href="{url}">{esc(r["name"])}</a>'
-                    f'{stars}</td><td align="right"><code>{r["count"]}</code></td></tr>')
+    for i, repo in enumerate(data["contributed"][:TOP_REPOS], 1):
+        url = f"https://github.com/{escape(repo['name'])}"
+        avatar = themed_image(f"{raw}/output/avatar-{i}.svg", f"{raw}/output/avatar-{i}-light.svg",
+                              width=26, height=26, align="absmiddle", alt="")
+        stars = f' <code>{star} {human_count(repo["stars"])}</code>' if repo.get("stars") else ""
+        rows.append(f'<tr><td><a href="{url}">{avatar}</a> <a href="{url}">{escape(repo["name"])}</a>'
+                    f'{stars}</td><td align="right"><code>{repo["count"]}</code></td></tr>')
     if not rows:
         rows.append('<tr><td colspan="2">no external contributions yet</td></tr>')
-    return (f"{PANEL_START}\n"
-            f'<table>\n<tr><th align="left">contributed in</th><th align="right">commits</th></tr>\n'
-            + "\n".join(rows) + f"\n</table>\n{PANEL_END}")
+    header = '<tr><th align="left">contributed in</th><th align="right">commits</th></tr>'
+    return f"{PANEL_START}\n<table>\n{header}\n" + "\n".join(rows) + f"\n</table>\n{PANEL_END}"
 
 
-def write_panel(block):
-    with README.open("r", encoding="utf-8", newline="") as fh:
-        old = fh.read()
+def write_panel(block, login):
+    with README.open("r", encoding="utf-8", newline="") as file:
+        old = file.read()
     if old.count(PANEL_START) != 1 or old.count(PANEL_END) != 1:
         raise SystemExit(f"README.md needs exactly one {PANEL_START} and one {PANEL_END}")
     if old.index(PANEL_END) < old.index(PANEL_START):
         raise SystemExit(f"README.md has {PANEL_END} before {PANEL_START}")
     if "\r\n" in old:
         block = block.replace("\n", "\r\n")
-    pattern = re.escape(PANEL_START) + r".*?" + re.escape(PANEL_END)
-    new = re.sub(pattern, lambda _: block, old, flags=re.S)
+
+    panel = re.escape(PANEL_START) + r".*?" + re.escape(PANEL_END)
+    new = re.sub(panel, lambda _: block, old, flags=re.S)
+
+    output_url = f"https://raw.githubusercontent.com/{login}/{login}/output/"
+    run_url = output_url + (f"{TILE_DIR}/" if TILE_DIR else "")
+    new = re.sub(re.escape(output_url) + r"(?:[0-9][0-9-]*/)?(?!profile\.webp)", run_url, new)
+
     if new == old:
         return False
-    with README.open("w", encoding="utf-8", newline="") as fh:
-        fh.write(new)
+    with README.open("w", encoding="utf-8", newline="") as file:
+        file.write(new)
     return True
 
 
 def build(data, palette):
     files = {}
-    for mode in ("dark", "light"):
-        t = theme_for(palette, mode)
+    for mode, suffix in MODES:
+        theme = theme_colors(palette, mode)
         accent, ink = PALETTES[palette][mode][3], PALETTES[palette][mode][4]
-        sfx = "" if mode == "dark" else "-light"
-        files[f"grid{sfx}.svg"] = grid_svg(data["weeks"], t)
-        files[f"blocks{sfx}.svg"] = blocks_svg(data, t)
-        files[f"radar{sfx}.svg"] = radar_svg(data, t, ink)
-        files[f"pie{sfx}.svg"] = pie_svg(data, t)
-        links = link_badges(BASE[mode], accent if mode == "dark" else ink)
-        for name, svg in {**badges(data, BASE[mode], accent), **links}.items():
-            files[name.replace(".svg", f"{sfx}.svg")] = svg
+        files[f"grid{suffix}.svg"] = grid_svg(data["weeks"], theme)
+        files[f"blocks{suffix}.svg"] = blocks_svg(data, theme)
+        files[f"radar{suffix}.svg"] = radar_svg(data, theme, ink)
+        files[f"pie{suffix}.svg"] = pie_svg(data, theme)
+        links = link_badges(BASE_COLORS[mode], accent if mode == "dark" else ink)
+        for name, svg in {**stat_badges(data, BASE_COLORS[mode], accent), **links}.items():
+            files[name.replace(".svg", f"{suffix}.svg")] = svg
     return files
 
 
-def retile_all(weeks_n):
-    missing = [f for files in TILES.values() for f in files if not (OUT / f).exists()]
+def retile_all(weeks):
+    missing = [f for files in TILES.values() for f in files if not (RUN_DIR / f).exists()]
     if missing:
-        raise SystemExit(f"retile: missing {', '.join(missing)} in {OUT}/, "
+        raise SystemExit(f"retile: missing {', '.join(missing)} in {RUN_DIR}/, "
                          "every tile needs a dark and a light file")
     expected = {f for files in TILES.values() for f in files}
-    expected |= {f"{c}{sfx}.svg" for c in CARDS for sfx in ("", "-light")}
-    stray = sorted(p.name for p in OUT.iterdir() if p.name not in expected)
+    expected |= {f"{card}{suffix}.svg" for card in CARD_NAMES for _, suffix in MODES}
+    stray = sorted(p.name for p in RUN_DIR.iterdir() if p.name not in expected)
     if stray:
-        raise SystemExit(f"retile: unexpected files in {OUT}/: {', '.join(stray)}")
-    for key, files in TILES.items():
-        if 'data-retiled="1"' in (OUT / files[0]).read_text():
+        raise SystemExit(f"retile: unexpected files in {RUN_DIR}/: {', '.join(stray)}")
+    for files in TILES.values():
+        if 'data-retiled="1"' in (RUN_DIR / files[0]).read_text():
             raise SystemExit(f"retile: {files[0]} is already retiled, start from a clean dist/")
 
-    vbs = {k: parse_viewbox((OUT / v[0]).read_text()) for k, v in TILES.items()}
-    boxes = {k: grid_box(k, weeks_n) for k in TILES}
-    box = tile_box(boxes, vbs)
-    print(f"tile window {box['w']:.1f} x {box['h']:.1f}, calendar {GRID_W:.0f} wide")
-    for key, files in TILES.items():
-        for f in files:
-            path = OUT / f
-            path.write_text(retile(path.read_text(), key, weeks_n, box))
-            print(f"retiled {f}")
+    viewboxes = {tile: read_viewbox((RUN_DIR / files[0]).read_text())
+                 for tile, files in TILES.items()}
+    boxes = {tile: calendar_box(tile, weeks) for tile in TILES}
+    frame = common_frame(boxes, viewboxes)
+    print(f"tile window {frame['width']:.1f} x {frame['height']:.1f}, "
+          f"calendar {CALENDAR_WIDTH:.0f} wide")
+    for tile, files in TILES.items():
+        for name in files:
+            path = RUN_DIR / name
+            path.write_text(retile(path.read_text(), tile, weeks, frame))
+            print(f"retiled {name}")
 
 
 def main():
-    OUT.mkdir(exist_ok=True)
+    RUN_DIR.mkdir(parents=True, exist_ok=True)
     if "--retile" in sys.argv:
         return retile_all(int(os.environ.get("WEEKS", "53")))
-    tiles = {f for key, files in TILES.items() if key != "grid" for f in files}
-    stray = sorted(p.name for p in OUT.iterdir() if p.name not in tiles)
+
+    action_tiles = {f for tile, files in TILES.items() if tile != "grid" for f in files}
+    stray = sorted(p.name for p in RUN_DIR.iterdir() if p.name not in action_tiles)
     if stray:
-        raise SystemExit(f"{OUT}/ should hold only the six tiles from the tiles job, found: {', '.join(stray)}")
+        raise SystemExit(f"{RUN_DIR}/ should hold only the six tiles from the tile actions, "
+                         f"found: {', '.join(stray)}")
 
     palette = os.environ.get("CARD_PALETTE", "blueprint-amber")
     login = os.environ["GITHUB_REPOSITORY_OWNER"]
     token = os.environ["GITHUB_TOKEN"]
 
-    main_data = post(token, QUERY_MAIN, login=login)
-    windows = [post(token, QUERY_WINDOW, login=login, **{"from": a, "to": b})
-               for a, b in year_windows(main_data["createdAt"])]
-    print(f"{login}: joined {main_data['createdAt'][:10]}, {len(windows)} year windows")
+    profile = graphql(token, PROFILE_QUERY, login=login)
+    years = [graphql(token, YEAR_QUERY, login=login, **{"from": start, "to": end})
+             for start, end in year_windows(profile["createdAt"])]
+    print(f"{login}: joined {profile['createdAt'][:10]}, {len(years)} year windows")
 
-    data = shape(main_data, windows, login)
-    print(f"{data['total']} contributions this year, {data['external_count']} external repos, "
-          f"{len(data['langs'])} languages, {data['repos']} public repos")
-    print("all time: " + ", ".join(f"{k} {v}" for k, v in data["radar"].items()))
+    data = summarize(profile, years, login)
+    print(f"{data['total']} contributions this year, {len(data['contributed'])} external repos, "
+          f"{len(data['languages'])} languages, {data['public_repos']} public repos")
+    print("all time: " + ", ".join(f"{kind} {count}" for kind, count in data["kinds"].items()))
 
     for name, svg in {**build(data, palette), **avatars(data)}.items():
-        (OUT / name).write_text(svg)
+        (RUN_DIR / name).write_text(svg)
         print(f"{name:22} {len(svg) // 1024:>4} KB")
 
-    print("README panel " + ("updated" if write_panel(panel_html(data)) else "unchanged"))
+    updated = write_panel(panel_html(data), login)
+    print("README panel " + ("updated" if updated else "unchanged"))
 
     weeks = len(data["weeks"])
     print(f"WEEKS={weeks}")
     if env_file := os.environ.get("GITHUB_ENV"):
-        with open(env_file, "a") as fh:
-            fh.write(f"WEEKS={weeks}\n")
+        with open(env_file, "a") as file:
+            file.write(f"WEEKS={weeks}\n")
 
 
 if __name__ == "__main__":

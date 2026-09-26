@@ -14,14 +14,27 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  tiles:
-    permissions:
-      contents: read
+  profile:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      TILE_DIR: ${{ github.run_id }}-${{ github.run_attempt }}
+    defaults:
+      run:
+        shell: bash
+
     steps:
-      - name: snake
-        uses: Platane/snk/svg-only@v3.5.0
+      - name: check out main (actions/checkout v7.0.1)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: snake (Platane/snk v3.5.0)
+        uses: Platane/snk/svg-only@d8f6715049803e982ee5ff501b6b9b7d5deeb09b
         with:
           github_user_name: ${{ github.repository_owner }}
           outputs: |
@@ -31,15 +44,15 @@ jobs:
       - name: keep pacman from phoning home
         run: echo "127.0.0.1 elec.abozanona.me" | sudo tee -a /etc/hosts
 
-      - name: pacman
-        uses: abozanona/pacman-contribution-graph@v5.3.2
+      - name: pacman (abozanona/pacman-contribution-graph v5.3.2)
+        uses: abozanona/pacman-contribution-graph@7332e1de7903ab780c3692a4127a59cc13872daa
         with:
           github_user_name: ${{ github.repository_owner }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           games: pacman
 
-      - name: game of life
-        uses: satomasahiro2005/contribution-life@v1.1.0
+      - name: game of life (satomasahiro2005/contribution-life v1.1.0)
+        uses: satomasahiro2005/contribution-life@0414ddb7cf15f7cea7de8d0f0ff38001632aefa4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           login: ${{ github.repository_owner }}
@@ -47,38 +60,16 @@ jobs:
           out_dir: dist
           name: life-raw
 
-      - name: rename the tiles
+      - name: move the tiles into the run folder
         run: |
-          set -e
-          mv dist/*-contribution-graph-dark.svg dist/game.svg
-          mv dist/*-contribution-graph.svg      dist/game-light.svg
-          mv dist/life-raw-dark.svg             dist/life.svg
-          mv dist/life-raw.svg                  dist/life-light.svg
+          mkdir -p "dist/$TILE_DIR"
+          mv dist/*-contribution-graph-dark.svg "dist/$TILE_DIR/game.svg"
+          mv dist/*-contribution-graph.svg "dist/$TILE_DIR/game-light.svg"
+          mv dist/life-raw-dark.svg "dist/$TILE_DIR/life.svg"
+          mv dist/life-raw.svg "dist/$TILE_DIR/life-light.svg"
+          mv dist/snake.svg dist/snake-light.svg "dist/$TILE_DIR/"
 
-      - uses: actions/upload-artifact@v7
-        with:
-          name: tiles
-          path: dist
-          retention-days: 7
-          if-no-files-found: error
-
-  publish:
-    needs: tiles
-    permissions:
-      contents: write
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - uses: actions/download-artifact@v8
-        with:
-          name: tiles
-          path: dist
-
-      - name: generate
+      - name: build the cards and the README panel
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARD_PALETTE: blueprint-amber
@@ -87,67 +78,63 @@ jobs:
       - name: align the four calendars
         run: python3 gen.py --retile
 
-      - name: publish
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: set the bot as the git author
         run: |
-          set -e
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+      - name: carry over the files still in use
+        run: |
           git show origin/output:profile.webp > dist/profile.webp 2>/dev/null || rm -f dist/profile.webp
-          cd dist
+          git show HEAD:README.md \
+            | { grep -o "raw.githubusercontent.com/${GITHUB_REPOSITORY}/output/[^\"' )?]*" || true; } \
+            | sed 's#.*/output/##' | sort -u \
+            | while read -r file; do
+                [ -e "dist/$file" ] && continue
+                mkdir -p "dist/$(dirname "$file")"
+                git show "origin/output:$file" > "dist/$file" 2>/dev/null || rm -f "dist/$file"
+              done
+
+      - name: publish the tiles
+        working-directory: dist
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
           git init -q -b output
           git add -A
           git commit -qm "profile assets"
           git push -qf "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" output
-          cd ..
 
-          base=$(git rev-parse HEAD)
+      - name: publish the README
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
           git diff --quiet -- README.md && exit 0
+          base=$(git rev-parse HEAD)
           git add README.md
-          if [ "$(git log -1 --format=%ae)" = "41898282+github-actions[bot]@users.noreply.github.com" ] &&
+          if [ "$(git log -1 --format=%ae)" = "$(git config user.email)" ] &&
              [ "$(git log -1 --format=%s)" = "refresh contributed-in panel [skip ci]" ]; then
             git commit -q --amend --no-edit
           else
             git commit -qm "refresh contributed-in panel [skip ci]"
           fi
-          git push -q --force-with-lease=main:"$base" origin HEAD:main
+          git push -q --force-with-lease=main:"$base" \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main
 
-  snapshot:
-    needs: publish
-    permissions:
-      contents: write
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v7
+      - name: install playwright
+        run: npm i --no-audit --no-fund playwright@1.62.1
 
-      - uses: actions/checkout@v7
-        with:
-          ref: output
-          path: out
-
-      - name: let the fresh tiles reach github.com
-        run: sleep 330
-
-      - name: browser
-        run: |
-          npm i playwright@1.62.1
-          npx playwright install --with-deps chromium
-
-      - name: shoot
+      - name: take the picture
         env:
           TARGET_URL: https://github.com/${{ github.repository_owner }}
-        run: node snapshot.mjs out/profile.webp
+        run: node snapshot.mjs dist/profile.webp
 
-      - name: publish
-        working-directory: out
+      - name: publish the picture
+        working-directory: dist
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -e
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add profile.webp
           git diff --quiet --cached && exit 0
           git commit -qm "profile snapshot"
-          git push -q origin HEAD:output
+          git push -q "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" output
